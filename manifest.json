@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Rubric",
+  "version": "1.0.0",
+  "description": "Inject custom request and response headers.",
+  "homepage_url": "https://github.com/rickardandersson/rubric",
+  "author": "rickard.andersson@gmail.com",
+  "icons": {
+    "48": "icons/rubric-48.png",
+    "96": "icons/rubric-96.png"
+  },
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "icons/rubric-16.png",
+      "32": "icons/rubric-32.png"
+    }
+  },
+  "permissions": [
+    "storage",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}

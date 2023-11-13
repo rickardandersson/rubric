@@ -1,0 +1,9 @@
+body {
+  margin: 0;
+  min-width: 800px;
+  min-height: 100vh;
+}
+
+#app {
+    padding: 1.5rem 1.5rem 2rem 1.5rem;
+}
