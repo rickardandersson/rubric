@@ -5,6 +5,11 @@
   "description": "Inject custom request and response headers.",
   "homepage_url": "https://github.com/rickardandersson/rubric",
   "author": "rickard.andersson@gmail.com",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{cac29261-130a-401f-bff1-f22ffd030234}"
+    }
+  },
   "icons": {
     "48": "icons/rubric-48.png",
     "96": "icons/rubric-96.png"
