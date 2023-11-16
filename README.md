@@ -6,7 +6,7 @@ Rubric supports Firefox and Chrome.
 
 ## Installation
 
-Install Rubric via [Firefox Add-ons](https://addons.mozilla.org/) or [Chrome Web Store](https://chrome.google.com/webstore/category/extensions?hl=en).
+Install Rubric via [Firefox Add-ons](https://addons.mozilla.org/en-GB/firefox/addon/rubric/) or [Chrome Web Store](https://chromewebstore.google.com/detail/rubric/ajlmfgkdeoeofjledikjcpnphihldlil).
 
 ## Local development
 
