@@ -63,3 +63,5 @@ export const getRulesToAdd = (requestHeaders, responseHeaders, urlRegexFilter, l
 
   return addRules;
 };
+
+export const isFirefox = /Firefox\/[0-9]+/.test(navigator.userAgent);

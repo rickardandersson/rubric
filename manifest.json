@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Rubric",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Inject custom request and response headers.",
   "homepage_url": "https://github.com/rickardandersson/rubric",
   "author": "rickard.andersson@gmail.com",
@@ -24,7 +24,8 @@
   "permissions": [
     "storage",
     "declarativeNetRequest",
-    "declarativeNetRequestFeedback"
+    "declarativeNetRequestFeedback",
+    "downloads"
   ],
   "host_permissions": [
     "<all_urls>"
