@@ -127,8 +127,8 @@ export const Popup = () => {
     let url = URL.createObjectURL(blob);
     chrome.downloads.download({
       url: url,
-      filename: 'rubric-export.json', // This appears to be ignored?
-      saveAs: true,
+      filename: 'rubric-export.json', // This appears to be ignored in Chrome
+      saveAs: !isFirefox,
     });
   };
 
