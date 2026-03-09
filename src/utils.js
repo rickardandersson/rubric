@@ -45,6 +45,14 @@ export const normalizeProfiles = (profiles) => {
   return profiles.map((profile, index) => createProfile(profile, index));
 };
 
+export const hasLegacySettings = (settings = {}) => {
+  const hasRequestHeaders = Array.isArray(settings.requestHeaders) && settings.requestHeaders.length > 0;
+  const hasResponseHeaders = Array.isArray(settings.responseHeaders) && settings.responseHeaders.length > 0;
+  const hasUrlRegexFilter = typeof settings.urlRegexFilter === 'string' && settings.urlRegexFilter.trim().length > 0;
+
+  return hasRequestHeaders || hasResponseHeaders || hasUrlRegexFilter || settings.limitToLocalHost === true;
+};
+
 export const getProfilesFromStorage = (settings = {}) => {
   if (Array.isArray(settings.profiles) && settings.profiles.length > 0) {
     return normalizeProfiles(settings.profiles);

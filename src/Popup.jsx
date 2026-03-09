@@ -34,6 +34,7 @@ import {
   createProfile,
   getProfilesFromStorage,
   getRulesToAdd,
+  hasLegacySettings,
   hasValidRegexFilter,
   isFirefox,
   parseImportedSettings,
@@ -82,6 +83,14 @@ export const Popup = () => {
       setProfiles(storedProfiles);
       setActiveProfileId(storedActiveProfileId);
       setRequiresPermissions(!hasPermissions);
+
+      if (!Array.isArray(result.profiles) && hasLegacySettings(result)) {
+        await chrome.storage.local.set({
+          profiles: storedProfiles,
+          activeProfileId: storedActiveProfileId,
+        });
+        await chrome.storage.local.remove(['requestHeaders', 'responseHeaders', 'urlRegexFilter', 'limitToLocalHost']);
+      }
     };
 
     loadSettings();
