@@ -281,16 +281,6 @@ export const Popup = () => {
           ))}
         </TextField>
 
-        <TextField
-          label='Profile name'
-          size='small'
-          value={activeProfile?.name ?? ''}
-          onChange={(event) => {
-            updateActiveProfile((profile) => ({ ...profile, name: event.target.value }));
-          }}
-          sx={{ flexGrow: 1, minWidth: '220px' }}
-        />
-
         <FormControlLabel
           control={
             <Checkbox
@@ -450,10 +440,21 @@ export const Popup = () => {
       {activeTabIndex === 2 && activeProfile && (
         <Box id='tabpanel-2' aria-labelledby='tab-2' paddingBlockStart='1rem'>
           <TextField
+            label='Profile name'
+            variant='outlined'
+            size='small'
+            fullWidth={true}
+            value={activeProfile.name}
+            onChange={(event) => {
+              updateActiveProfile((profile) => ({ ...profile, name: event.target.value }));
+            }}
+          />
+          <TextField
             label='URL filter (regex)'
             variant='outlined'
             size='small'
             fullWidth={true}
+            sx={{ marginBlockStart: '1rem' }}
             value={activeProfile.urlRegexFilter}
             error={!regexIsMissing && !regexIsValid}
             helperText={
