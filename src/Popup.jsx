@@ -16,10 +16,12 @@ import {
   IconButton,
   List,
   ListItem,
+  MenuItem,
   Snackbar,
   Tab,
   Tabs,
   TextField,
+  Typography,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -27,134 +29,225 @@ import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import FileUploadOutlinedIcon from '@mui/icons-material/FileUploadOutlined';
 import Link from '@mui/material/Link';
 import { Header } from './Header.jsx';
-import { getRulesToAdd, isFirefox } from './utils.js';
+import {
+  createEmptyHeader,
+  createProfile,
+  getProfilesFromStorage,
+  getRulesToAdd,
+  hasLegacySettings,
+  hasValidRegexFilter,
+  isFirefox,
+  parseImportedSettings,
+} from './utils.js';
 
 export const Popup = () => {
   const [enabled, setEnabled] = useState(true);
-  const [requestHeaders, setRequestHeaders] = useState([]);
-  const [responseHeaders, setResponseHeaders] = useState([]);
-  const [urlRegexFilter, setUrlRegexFilter] = useState('');
-  const [limitToLocalHost, setLimitToLocalHost] = useState(false);
+  const [profiles, setProfiles] = useState([createProfile()]);
+  const [activeProfileId, setActiveProfileId] = useState('');
   const [activeTabIndex, setActiveTabIndex] = useState(0);
   const [requiresPermissions, setRequiresPermissions] = useState(false);
   const [importText, setImportText] = useState('');
   const [importSuccessful, setImportSuccessful] = useState(false);
   const [importFailed, setImportFailed] = useState(false);
 
-  // Side effect for initial load
-  useEffect(async () => {
-    // Get settings from storage
-    const result = await chrome.storage.local.get(['enabled', 'requestHeaders', 'responseHeaders', 'urlRegexFilter', 'limitToLocalHost']);
-    setEnabled(result.enabled ?? true);
-    setRequestHeaders(result.requestHeaders ?? []);
-    setResponseHeaders(result.responseHeaders ?? []);
-    setUrlRegexFilter(result.urlRegexFilter ?? '');
-    setLimitToLocalHost(result.limitToLocalHost ?? false);
+  const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? profiles[0];
+  const regexIsMissing = activeProfile ? activeProfile.urlRegexFilter.length === 0 : true;
+  const regexIsValid = activeProfile ? hasValidRegexFilter(activeProfile.urlRegexFilter) : false;
 
-    // Check if we have the required host permissions
-    const hasPermissions = await chrome.permissions.contains({
-      origins: ['<all_urls>'],
-    });
-    if (!hasPermissions) {
-      setRequiresPermissions(true);
-    }
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSettings = async () => {
+      const result = await chrome.storage.local.get([
+        'enabled',
+        'profiles',
+        'activeProfileId',
+        'requestHeaders',
+        'responseHeaders',
+        'urlRegexFilter',
+        'limitToLocalHost',
+      ]);
+      const storedProfiles = getProfilesFromStorage(result);
+      const storedActiveProfileId = storedProfiles.some((profile) => profile.id === result.activeProfileId)
+        ? result.activeProfileId
+        : storedProfiles[0].id;
+      const hasPermissions = await chrome.permissions.contains({
+        origins: ['<all_urls>'],
+      });
+
+      if (cancelled) {
+        return;
+      }
+
+      setEnabled(result.enabled ?? true);
+      setProfiles(storedProfiles);
+      setActiveProfileId(storedActiveProfileId);
+      setRequiresPermissions(!hasPermissions);
+
+      if (!Array.isArray(result.profiles) && hasLegacySettings(result)) {
+        await chrome.storage.local.set({
+          profiles: storedProfiles,
+          activeProfileId: storedActiveProfileId,
+        });
+        await chrome.storage.local.remove(['requestHeaders', 'responseHeaders', 'urlRegexFilter', 'limitToLocalHost']);
+      }
+    };
+
+    loadSettings();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Side effect for changes to settings
-  useEffect(async () => {
-    // Save settings to storage
-    await chrome.storage.local.set({ enabled, requestHeaders, responseHeaders, urlRegexFilter, limitToLocalHost });
+  useEffect(() => {
+    if (profiles.length === 0) {
+      const fallbackProfile = createProfile();
+      setProfiles([fallbackProfile]);
+      setActiveProfileId(fallbackProfile.id);
+      return;
+    }
 
-    // Update declarativeNetRequest dynamic rules
-    const addRules = enabled ? getRulesToAdd(requestHeaders, responseHeaders, urlRegexFilter, limitToLocalHost) : [];
-    const oldRules = await chrome.declarativeNetRequest.getDynamicRules();
-    const removeRuleIds = oldRules.map((rule) => rule.id);
+    if (!profiles.some((profile) => profile.id === activeProfileId)) {
+      setActiveProfileId(profiles[0].id);
+    }
+  }, [profiles, activeProfileId]);
 
-    await chrome.declarativeNetRequest.updateDynamicRules({
-      removeRuleIds,
-      addRules,
-    });
-  }, [requestHeaders, responseHeaders, urlRegexFilter, limitToLocalHost, enabled]);
+  useEffect(() => {
+    const persistSettings = async () => {
+      await chrome.storage.local.set({ enabled, profiles, activeProfileId });
 
-  const handleChangeTab = (event, newValue) => {
+      const addRules = enabled ? getRulesToAdd(profiles) : [];
+      const oldRules = await chrome.declarativeNetRequest.getDynamicRules();
+      const removeRuleIds = oldRules.map((rule) => rule.id);
+
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds,
+        addRules,
+      });
+    };
+
+    if (activeProfileId.length > 0) {
+      persistSettings();
+    }
+  }, [activeProfileId, enabled, profiles]);
+
+  const handleChangeTab = (_event, newValue) => {
     setActiveTabIndex(newValue);
   };
 
-  // Helper function for updating request headers from onchange/onblur events
-  const updateRequestHeaders = (index, property, value) => {
-    const oldValue = requestHeaders[index][property];
-    console.log(`updateRequestHeaders: index=${index}, property=${property}, oldValue=${oldValue}, value=${value}`);
-    if (oldValue !== value) {
-      const newRequestHeaders = [...requestHeaders];
-      newRequestHeaders[index][property] = typeof value === 'string' ? value.trim() : value;
-      setRequestHeaders(newRequestHeaders);
+  const updateProfile = (profileId, updater) => {
+    setProfiles((currentProfiles) =>
+      currentProfiles.map((profile, index) => {
+        if (profile.id !== profileId) {
+          return profile;
+        }
+
+        const nextProfile = typeof updater === 'function' ? updater(profile) : updater;
+        return createProfile(nextProfile, index);
+      }),
+    );
+  };
+
+  const updateActiveProfile = (updater) => {
+    if (!activeProfile) {
+      return;
+    }
+
+    updateProfile(activeProfile.id, updater);
+  };
+
+  const addProfile = () => {
+    let newProfile;
+
+    setProfiles((currentProfiles) => {
+      newProfile = createProfile({}, currentProfiles.length);
+      return [...currentProfiles, newProfile];
+    });
+
+    if (newProfile) {
+      setActiveProfileId(newProfile.id);
     }
   };
 
-  const deleteRequestHeader = (index) => {
-    const newRequestHeaders = [...requestHeaders];
-    newRequestHeaders.splice(index, 1);
-    setRequestHeaders(newRequestHeaders);
-  };
-
-  // Helper function for updating response headers from onchange/onblur events
-  const updateResponseHeaders = (index, property, value) => {
-    const oldValue = responseHeaders[index][property];
-    if (oldValue !== value) {
-      const newResponseHeaders = [...responseHeaders];
-      newResponseHeaders[index][property] = typeof value === 'string' ? value.trim() : value;
-      setResponseHeaders(newResponseHeaders);
+  const deleteActiveProfile = () => {
+    if (!activeProfile || profiles.length === 1) {
+      return;
     }
+
+    const activeIndex = profiles.findIndex((profile) => profile.id === activeProfile.id);
+    const nextActiveProfile = profiles[activeIndex - 1] ?? profiles[activeIndex + 1] ?? profiles[0];
+
+    setProfiles((currentProfiles) => currentProfiles.filter((profile) => profile.id !== activeProfile.id));
+    setActiveProfileId(nextActiveProfile.id);
   };
 
-  const deleteResponseHeader = (index) => {
-    const newResponseHeaders = [...responseHeaders];
-    newResponseHeaders.splice(index, 1);
-    setResponseHeaders(newResponseHeaders);
+  const updateHeaders = (type, index, property, value) => {
+    updateActiveProfile((profile) => ({
+      ...profile,
+      [type]: profile[type].map((header, headerIndex) =>
+        headerIndex === index
+          ? {
+              ...header,
+              [property]: value,
+            }
+          : header,
+      ),
+    }));
+  };
+
+  const addHeader = (type) => {
+    updateActiveProfile((profile) => ({
+      ...profile,
+      [type]: [...profile[type], createEmptyHeader()],
+    }));
+  };
+
+  const deleteHeader = (type, index) => {
+    updateActiveProfile((profile) => ({
+      ...profile,
+      [type]: profile[type].filter((_header, headerIndex) => headerIndex !== index),
+    }));
   };
 
   const exportSettings = () => {
-    // Construct the content of the export file
-    let exportObject = {
-      requestHeaders: requestHeaders.length > 0 ? requestHeaders : undefined,
-      responseHeaders: responseHeaders.length > 0 ? responseHeaders : undefined,
-      urlRegexFilter: urlRegexFilter.length > 0 ? urlRegexFilter : undefined,
-      limitToLocalHost: limitToLocalHost ? limitToLocalHost : undefined,
+    const exportObject = {
+      enabled,
+      profiles,
     };
 
-    // Create a blog and download it
-    let blob = new Blob([JSON.stringify(exportObject, null, 2)], { type: 'application/json' });
-    let url = URL.createObjectURL(blob);
+    const blob = new Blob([JSON.stringify(exportObject, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
     chrome.downloads.download({
-      url: url,
-      filename: 'rubric-export.json', // This appears to be ignored in Chrome
+      url,
+      filename: 'rubric-export.json',
       saveAs: !isFirefox,
     });
   };
 
   const importSettings = (settingsText) => {
     try {
-      // Parse the import file and update state accordingly
-      let importObject = JSON.parse(settingsText);
-      setRequestHeaders(importObject.requestHeaders ?? requestHeaders);
-      setResponseHeaders(importObject.responseHeaders ?? responseHeaders);
-      setUrlRegexFilter(importObject.urlRegexFilter ?? urlRegexFilter);
-      setLimitToLocalHost(importObject.limitToLocalHost ?? limitToLocalHost);
+      const importObject = parseImportedSettings(settingsText);
+      setEnabled(importObject.enabled ?? enabled);
+      setProfiles(importObject.profiles);
+      setActiveProfileId(importObject.profiles[0].id);
       setImportSuccessful(true);
+      setImportFailed(false);
     } catch (error) {
       setImportFailed(true);
+      setImportSuccessful(false);
       console.error('Failed to import settings', error);
     }
   };
 
   const handleFileSelected = (event) => {
-    let [file] = event.target.files;
+    const [file] = event.target.files;
     if (!file) {
       console.error('No file selected for import');
       return;
     }
 
-    let reader = new FileReader();
+    const reader = new FileReader();
     reader.addEventListener(
       'load',
       () => {
@@ -164,6 +257,7 @@ export const Popup = () => {
     );
 
     reader.readAsText(file);
+    event.target.value = '';
   };
 
   return (
@@ -179,6 +273,48 @@ export const Popup = () => {
 
       <Header enabled={enabled} setEnabled={setEnabled} />
 
+      <Box display='flex' flexWrap='wrap' gap='0.75rem' alignItems='center' marginBlockStart='1rem'>
+        <TextField
+          select
+          label='Profile'
+          size='small'
+          value={activeProfile?.id ?? ''}
+          onChange={(event) => {
+            setActiveProfileId(event.target.value);
+          }}
+          sx={{ minWidth: '220px' }}>
+          {profiles.map((profile) => (
+            <MenuItem key={profile.id} value={profile.id}>
+              {profile.name}
+            </MenuItem>
+          ))}
+        </TextField>
+
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={activeProfile?.enabled ?? true}
+              onChange={(event) => {
+                updateActiveProfile((profile) => ({ ...profile, enabled: event.target.checked }));
+              }}
+            />
+          }
+          label='Profile enabled'
+        />
+
+        <Button variant='outlined' startIcon={<AddIcon />} onClick={addProfile}>
+          Add profile
+        </Button>
+
+        <IconButton aria-label='delete profile' disabled={profiles.length === 1} onClick={deleteActiveProfile}>
+          <DeleteIcon />
+        </IconButton>
+      </Box>
+
+      <Typography variant='body2' color='text.secondary' sx={{ marginBlockStart: '0.5rem' }}>
+        Each profile is tied to its own URL regex and can manage separate request and response headers.
+      </Typography>
+
       <Box sx={{ borderBottom: 1, borderColor: 'divider', marginBlock: '1rem' }}>
         <Tabs value={activeTabIndex} onChange={handleChangeTab} aria-label='Switch between tabs'>
           <Tab id='tab-0' aria-controls='tabpanel-0' label='Request headers' />
@@ -188,15 +324,23 @@ export const Popup = () => {
         </Tabs>
       </Box>
 
-      {activeTabIndex === 0 && (
+      {activeTabIndex === 0 && activeProfile && (
         <Box id='tabpanel-0' aria-labelledby='tab-0'>
+          {(regexIsMissing || !regexIsValid) && (
+            <Alert variant='outlined' severity={regexIsMissing ? 'warning' : 'error'} sx={{ marginBlockEnd: '1rem' }}>
+              {regexIsMissing
+                ? 'This profile needs a URL regex before any request headers can be applied.'
+                : 'This profile has an invalid URL regex, so no request header rules will be created.'}
+            </Alert>
+          )}
+
           <List>
-            {requestHeaders.map((header, index) => (
+            {activeProfile.requestHeaders.map((header, index) => (
               <ListItem key={index} disableGutters={true} sx={{ gap: '.75rem' }}>
                 <Checkbox
                   checked={header.enabled}
                   onChange={(event) => {
-                    updateRequestHeaders(index, 'enabled', event.target.checked);
+                    updateHeaders('requestHeaders', index, 'enabled', event.target.checked);
                   }}
                 />
                 <TextField
@@ -205,8 +349,8 @@ export const Popup = () => {
                   size='small'
                   fullWidth={true}
                   value={header.name}
-                  onBlur={(event) => {
-                    updateRequestHeaders(index, 'name', event.target.value);
+                  onChange={(event) => {
+                    updateHeaders('requestHeaders', index, 'name', event.target.value);
                   }}
                 />
                 <TextField
@@ -215,14 +359,14 @@ export const Popup = () => {
                   size='small'
                   fullWidth={true}
                   value={header.value}
-                  onBlur={(event) => {
-                    updateRequestHeaders(index, 'value', event.target.value);
+                  onChange={(event) => {
+                    updateHeaders('requestHeaders', index, 'value', event.target.value);
                   }}
                 />
                 <IconButton
                   aria-label='delete'
                   onClick={() => {
-                    deleteRequestHeader(index);
+                    deleteHeader('requestHeaders', index);
                   }}>
                   <DeleteIcon />
                 </IconButton>
@@ -234,28 +378,30 @@ export const Popup = () => {
             startIcon={<AddIcon />}
             color='primary'
             onClick={() => {
-              setRequestHeaders([...requestHeaders, { name: '', value: '', enabled: true }]);
+              addHeader('requestHeaders');
             }}>
             Add request header
           </Button>
-          {requestHeaders.length > 0 && urlRegexFilter.length === 0 && (
-            <Alert variant='outlined' severity='warning' sx={{ marginBlockStart: '2rem' }}>
-              You have no URL filter provided in the Settings tab. Any request headers you add here will be sent to all domains/paths. Be careful not
-              to leak secrets!
-            </Alert>
-          )}
         </Box>
       )}
 
-      {activeTabIndex === 1 && (
+      {activeTabIndex === 1 && activeProfile && (
         <Box id='tabpanel-1' aria-labelledby='tab-1'>
+          {(regexIsMissing || !regexIsValid) && (
+            <Alert variant='outlined' severity={regexIsMissing ? 'warning' : 'error'} sx={{ marginBlockEnd: '1rem' }}>
+              {regexIsMissing
+                ? 'This profile needs a URL regex before any response headers can be applied.'
+                : 'This profile has an invalid URL regex, so no response header rules will be created.'}
+            </Alert>
+          )}
+
           <List>
-            {responseHeaders.map((header, index) => (
+            {activeProfile.responseHeaders.map((header, index) => (
               <ListItem key={index} disableGutters={true} sx={{ gap: '.75rem' }}>
                 <Checkbox
                   checked={header.enabled}
                   onChange={(event) => {
-                    updateResponseHeaders(index, 'enabled', event.target.checked);
+                    updateHeaders('responseHeaders', index, 'enabled', event.target.checked);
                   }}
                 />
                 <TextField
@@ -264,8 +410,8 @@ export const Popup = () => {
                   size='small'
                   fullWidth={true}
                   value={header.name}
-                  onBlur={(event) => {
-                    updateResponseHeaders(index, 'name', event.target.value);
+                  onChange={(event) => {
+                    updateHeaders('responseHeaders', index, 'name', event.target.value);
                   }}
                 />
                 <TextField
@@ -274,14 +420,14 @@ export const Popup = () => {
                   size='small'
                   fullWidth={true}
                   value={header.value}
-                  onBlur={(event) => {
-                    updateResponseHeaders(index, 'value', event.target.value);
+                  onChange={(event) => {
+                    updateHeaders('responseHeaders', index, 'value', event.target.value);
                   }}
                 />
                 <IconButton
                   aria-label='delete'
                   onClick={() => {
-                    deleteResponseHeader(index);
+                    deleteHeader('responseHeaders', index);
                   }}>
                   <DeleteIcon />
                 </IconButton>
@@ -293,35 +439,51 @@ export const Popup = () => {
             startIcon={<AddIcon />}
             color='primary'
             onClick={() => {
-              setResponseHeaders([...responseHeaders, { name: '', value: '', enabled: true }]);
+              addHeader('responseHeaders');
             }}>
             Add response header
           </Button>
         </Box>
       )}
 
-      {activeTabIndex === 2 && (
+      {activeTabIndex === 2 && activeProfile && (
         <Box id='tabpanel-2' aria-labelledby='tab-2' paddingBlockStart='1rem'>
+          <TextField
+            label='Profile name'
+            variant='outlined'
+            size='small'
+            fullWidth={true}
+            value={activeProfile.name}
+            onChange={(event) => {
+              updateActiveProfile((profile) => ({ ...profile, name: event.target.value }));
+            }}
+          />
           <TextField
             label='URL filter (regex)'
             variant='outlined'
             size='small'
-            helperText='A regular expression (RE2 format) that limits which URLs to apply custom headers to. E.g. https:\/\/.*\.example\.(com|org)\/.*'
             fullWidth={true}
-            value={urlRegexFilter}
-            onBlur={(event) => {
-              if (urlRegexFilter !== event.target.value) {
-                setUrlRegexFilter(event.target.value.trim());
-              }
+            sx={{ marginBlockStart: '1rem' }}
+            value={activeProfile.urlRegexFilter}
+            error={!regexIsMissing && !regexIsValid}
+            helperText={
+              regexIsMissing
+                ? 'Each profile needs a regular expression (RE2 format) before any headers will be applied.'
+                : !regexIsValid
+                  ? 'The current regex is invalid and will not generate any rules.'
+                  : 'This regular expression limits which URLs this profile applies custom headers to. E.g. https://.*.example.(com|org)/.*'
+            }
+            onChange={(event) => {
+              updateActiveProfile((profile) => ({ ...profile, urlRegexFilter: event.target.value }));
             }}
           />
           <FormControlLabel
             sx={{ marginBlockStart: '1rem' }}
             control={
               <Checkbox
-                checked={limitToLocalHost}
-                onChange={() => {
-                  setLimitToLocalHost(!limitToLocalHost);
+                checked={activeProfile.limitToLocalHost}
+                onChange={(event) => {
+                  updateActiveProfile((profile) => ({ ...profile, limitToLocalHost: event.target.checked }));
                 }}
               />
             }
@@ -373,18 +535,14 @@ export const Popup = () => {
               </Button>
             )}
             <Box paddingBlockStart='1rem'>
-              <Button
-                variant='outlined'
-                startIcon={<FileDownloadOutlinedIcon />}
-                color='primary'
-                onClick={exportSettings}
-                disabled={requestHeaders.length === 0 && responseHeaders.length === 0 && urlRegexFilter.length === 0}>
+              <Button variant='outlined' startIcon={<FileDownloadOutlinedIcon />} color='primary' onClick={exportSettings}>
                 Export
               </Button>
             </Box>
           </Box>
         </Box>
       )}
+
       <Snackbar
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
         autoHideDuration={3000}
