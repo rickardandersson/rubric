@@ -1,34 +1,15 @@
 /*
- * Copyright (c) 2023, Rickard Andersson <rickard.andersson@gmail.com>
+ * Copyright (c) 2023-2026, Rickard Andersson <rickard.andersson@gmail.com>
  *
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+import { Alert, AlertTitle, Box, FormControlLabel, Snackbar, Switch, Tab, Tabs } from '@mui/material';
 import { useEffect, useState } from 'preact/hooks';
-import {
-  Alert,
-  AlertTitle,
-  Box,
-  Button,
-  Checkbox,
-  Divider,
-  FormControlLabel,
-  IconButton,
-  List,
-  ListItem,
-  MenuItem,
-  Snackbar,
-  Tab,
-  Tabs,
-  TextField,
-  Typography,
-} from '@mui/material';
-import DeleteIcon from '@mui/icons-material/Delete';
-import AddIcon from '@mui/icons-material/Add';
-import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
-import FileUploadOutlinedIcon from '@mui/icons-material/FileUploadOutlined';
-import Link from '@mui/material/Link';
 import { Header } from './Header.jsx';
+import { HeaderList } from './HeaderList.jsx';
+import { ImportExportTab } from './ImportExportTab.jsx';
+import { SettingsTab } from './SettingsTab.jsx';
 import {
   createEmptyHeader,
   createProfile,
@@ -49,10 +30,27 @@ export const Popup = () => {
   const [importText, setImportText] = useState('');
   const [importSuccessful, setImportSuccessful] = useState(false);
   const [importFailed, setImportFailed] = useState(false);
+  const [ruleUpdateError, setRuleUpdateError] = useState('');
+  const [storageError, setStorageError] = useState('');
+  const [regexIsValid, setRegexIsValid] = useState(false);
 
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? profiles[0];
   const regexIsMissing = activeProfile ? activeProfile.urlRegexFilter.length === 0 : true;
-  const regexIsValid = activeProfile ? hasValidRegexFilter(activeProfile.urlRegexFilter) : false;
+
+  // Effect: Validate regex filter against the RE2 engine
+  useEffect(() => {
+    if (!activeProfile || activeProfile.urlRegexFilter.trim().length === 0) {
+      setRegexIsValid(false);
+      return;
+    }
+    let cancelled = false;
+    hasValidRegexFilter(activeProfile.urlRegexFilter).then((valid) => {
+      if (!cancelled) setRegexIsValid(valid);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProfile?.urlRegexFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -113,24 +111,40 @@ export const Popup = () => {
     }
   }, [profiles, activeProfileId]);
 
+  // Effect 3a: Persist settings to storage immediately
   useEffect(() => {
-    const persistSettings = async () => {
-      await chrome.storage.local.set({ enabled, profiles, activeProfileId });
-
-      const addRules = enabled ? getRulesToAdd(profiles) : [];
-      const oldRules = await chrome.declarativeNetRequest.getDynamicRules();
-      const removeRuleIds = oldRules.map((rule) => rule.id);
-
-      await chrome.declarativeNetRequest.updateDynamicRules({
-        removeRuleIds,
-        addRules,
-      });
-    };
-
     if (activeProfileId.length > 0) {
-      persistSettings();
+      chrome.storage.local.set({ enabled, profiles, activeProfileId }).then(
+        () => setStorageError(''),
+        (error) => {
+          console.error('Failed to persist settings', error);
+          setStorageError(error?.message ?? 'Failed to save settings');
+        },
+      );
     }
   }, [activeProfileId, enabled, profiles]);
+
+  // Effect 3b: Rebuild declarativeNetRequest rules (debounced)
+  useEffect(() => {
+    const timeout = setTimeout(async () => {
+      try {
+        const addRules = enabled ? await getRulesToAdd(profiles) : [];
+        const oldRules = await chrome.declarativeNetRequest.getDynamicRules();
+        const removeRuleIds = oldRules.map((rule) => rule.id);
+
+        await chrome.declarativeNetRequest.updateDynamicRules({
+          removeRuleIds,
+          addRules,
+        });
+        setRuleUpdateError('');
+      } catch (error) {
+        console.error('Failed to update rules', error);
+        setRuleUpdateError(error?.message ?? 'Failed to update rules');
+      }
+    }, 400);
+
+    return () => clearTimeout(timeout);
+  }, [enabled, profiles]);
 
   const handleChangeTab = (_event, newValue) => {
     setActiveTabIndex(newValue);
@@ -158,16 +172,9 @@ export const Popup = () => {
   };
 
   const addProfile = () => {
-    let newProfile;
-
-    setProfiles((currentProfiles) => {
-      newProfile = createProfile({}, currentProfiles.length);
-      return [...currentProfiles, newProfile];
-    });
-
-    if (newProfile) {
-      setActiveProfileId(newProfile.id);
-    }
+    const newProfile = createProfile({}, profiles.length);
+    setProfiles((currentProfiles) => [...currentProfiles, newProfile]);
+    setActiveProfileId(newProfile.id);
   };
 
   const deleteActiveProfile = () => {
@@ -218,11 +225,16 @@ export const Popup = () => {
 
     const blob = new Blob([JSON.stringify(exportObject, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    chrome.downloads.download({
-      url,
-      filename: 'rubric-export.json',
-      saveAs: !isFirefox,
-    });
+    chrome.downloads.download(
+      {
+        url,
+        filename: 'rubric-export.json',
+        saveAs: !isFirefox,
+      },
+      () => {
+        URL.revokeObjectURL(url);
+      },
+    );
   };
 
   const importSettings = (settingsText) => {
@@ -271,276 +283,84 @@ export const Popup = () => {
         </Alert>
       )}
 
-      <Header enabled={enabled} setEnabled={setEnabled} />
+      <Header
+        enabled={enabled}
+        setEnabled={setEnabled}
+        profiles={profiles}
+        activeProfile={activeProfile}
+        setActiveProfileId={setActiveProfileId}
+        addProfile={addProfile}
+        deleteActiveProfile={deleteActiveProfile}
+      />
 
       <Box display='flex' flexWrap='wrap' gap='0.75rem' alignItems='center' marginBlockStart='1rem'>
-        <TextField
-          select
-          label='Profile'
-          size='small'
-          value={activeProfile?.id ?? ''}
-          onChange={(event) => {
-            setActiveProfileId(event.target.value);
-          }}
-          sx={{ minWidth: '220px' }}>
-          {profiles.map((profile) => (
-            <MenuItem key={profile.id} value={profile.id}>
-              {profile.name}
-            </MenuItem>
-          ))}
-        </TextField>
-
         <FormControlLabel
           control={
-            <Checkbox
+            <Switch
               checked={activeProfile?.enabled ?? true}
               onChange={(event) => {
                 updateActiveProfile((profile) => ({ ...profile, enabled: event.target.checked }));
               }}
             />
           }
-          label='Profile enabled'
+          label='Enable profile'
         />
-
-        <Button variant='outlined' startIcon={<AddIcon />} onClick={addProfile}>
-          Add profile
-        </Button>
-
-        <IconButton aria-label='delete profile' disabled={profiles.length === 1} onClick={deleteActiveProfile}>
-          <DeleteIcon />
-        </IconButton>
       </Box>
-
-      <Typography variant='body2' color='text.secondary' sx={{ marginBlockStart: '0.5rem' }}>
-        Each profile is tied to its own URL regex and can manage separate request and response headers.
-      </Typography>
 
       <Box sx={{ borderBottom: 1, borderColor: 'divider', marginBlock: '1rem' }}>
         <Tabs value={activeTabIndex} onChange={handleChangeTab} aria-label='Switch between tabs'>
           <Tab id='tab-0' aria-controls='tabpanel-0' label='Request headers' />
           <Tab id='tab-1' aria-controls='tabpanel-1' label='Response headers' />
           <Tab id='tab-2' aria-controls='tabpanel-2' label='Settings' />
-          <Tab id='tab-3' aria-controls='tabpanel-3' label='Import/export' />
+          <Tab id='tab-3' aria-controls='tabpanel-3' label='Import/export' sx={{ marginInlineStart: 'auto' }} />
         </Tabs>
       </Box>
 
       {activeTabIndex === 0 && activeProfile && (
         <Box id='tabpanel-0' aria-labelledby='tab-0'>
-          {(regexIsMissing || !regexIsValid) && (
-            <Alert variant='outlined' severity={regexIsMissing ? 'warning' : 'error'} sx={{ marginBlockEnd: '1rem' }}>
-              {regexIsMissing
-                ? 'This profile needs a URL regex before any request headers can be applied.'
-                : 'This profile has an invalid URL regex, so no request header rules will be created.'}
-            </Alert>
-          )}
-
-          <List>
-            {activeProfile.requestHeaders.map((header, index) => (
-              <ListItem key={index} disableGutters={true} sx={{ gap: '.75rem' }}>
-                <Checkbox
-                  checked={header.enabled}
-                  onChange={(event) => {
-                    updateHeaders('requestHeaders', index, 'enabled', event.target.checked);
-                  }}
-                />
-                <TextField
-                  label='Name'
-                  variant='outlined'
-                  size='small'
-                  fullWidth={true}
-                  value={header.name}
-                  onChange={(event) => {
-                    updateHeaders('requestHeaders', index, 'name', event.target.value);
-                  }}
-                />
-                <TextField
-                  label='Value'
-                  variant='outlined'
-                  size='small'
-                  fullWidth={true}
-                  value={header.value}
-                  onChange={(event) => {
-                    updateHeaders('requestHeaders', index, 'value', event.target.value);
-                  }}
-                />
-                <IconButton
-                  aria-label='delete'
-                  onClick={() => {
-                    deleteHeader('requestHeaders', index);
-                  }}>
-                  <DeleteIcon />
-                </IconButton>
-              </ListItem>
-            ))}
-          </List>
-          <Button
-            variant='outlined'
-            startIcon={<AddIcon />}
-            color='primary'
-            onClick={() => {
-              addHeader('requestHeaders');
-            }}>
-            Add request header
-          </Button>
+          <HeaderList
+            type='requestHeaders'
+            headers={activeProfile.requestHeaders}
+            regexIsMissing={regexIsMissing}
+            regexIsValid={regexIsValid}
+            updateHeaders={updateHeaders}
+            deleteHeader={deleteHeader}
+            addHeader={addHeader}
+          />
         </Box>
       )}
 
       {activeTabIndex === 1 && activeProfile && (
         <Box id='tabpanel-1' aria-labelledby='tab-1'>
-          {(regexIsMissing || !regexIsValid) && (
-            <Alert variant='outlined' severity={regexIsMissing ? 'warning' : 'error'} sx={{ marginBlockEnd: '1rem' }}>
-              {regexIsMissing
-                ? 'This profile needs a URL regex before any response headers can be applied.'
-                : 'This profile has an invalid URL regex, so no response header rules will be created.'}
-            </Alert>
-          )}
-
-          <List>
-            {activeProfile.responseHeaders.map((header, index) => (
-              <ListItem key={index} disableGutters={true} sx={{ gap: '.75rem' }}>
-                <Checkbox
-                  checked={header.enabled}
-                  onChange={(event) => {
-                    updateHeaders('responseHeaders', index, 'enabled', event.target.checked);
-                  }}
-                />
-                <TextField
-                  label='Name'
-                  variant='outlined'
-                  size='small'
-                  fullWidth={true}
-                  value={header.name}
-                  onChange={(event) => {
-                    updateHeaders('responseHeaders', index, 'name', event.target.value);
-                  }}
-                />
-                <TextField
-                  label='Value'
-                  variant='outlined'
-                  size='small'
-                  fullWidth={true}
-                  value={header.value}
-                  onChange={(event) => {
-                    updateHeaders('responseHeaders', index, 'value', event.target.value);
-                  }}
-                />
-                <IconButton
-                  aria-label='delete'
-                  onClick={() => {
-                    deleteHeader('responseHeaders', index);
-                  }}>
-                  <DeleteIcon />
-                </IconButton>
-              </ListItem>
-            ))}
-          </List>
-          <Button
-            variant='outlined'
-            startIcon={<AddIcon />}
-            color='primary'
-            onClick={() => {
-              addHeader('responseHeaders');
-            }}>
-            Add response header
-          </Button>
+          <HeaderList
+            type='responseHeaders'
+            headers={activeProfile.responseHeaders}
+            regexIsMissing={regexIsMissing}
+            regexIsValid={regexIsValid}
+            updateHeaders={updateHeaders}
+            deleteHeader={deleteHeader}
+            addHeader={addHeader}
+          />
         </Box>
       )}
 
       {activeTabIndex === 2 && activeProfile && (
-        <Box id='tabpanel-2' aria-labelledby='tab-2' paddingBlockStart='1rem'>
-          <TextField
-            label='Profile name'
-            variant='outlined'
-            size='small'
-            fullWidth={true}
-            value={activeProfile.name}
-            onChange={(event) => {
-              updateActiveProfile((profile) => ({ ...profile, name: event.target.value }));
-            }}
-          />
-          <TextField
-            label='URL filter (regex)'
-            variant='outlined'
-            size='small'
-            fullWidth={true}
-            sx={{ marginBlockStart: '1rem' }}
-            value={activeProfile.urlRegexFilter}
-            error={!regexIsMissing && !regexIsValid}
-            helperText={
-              regexIsMissing
-                ? 'Each profile needs a regular expression (RE2 format) before any headers will be applied.'
-                : !regexIsValid
-                  ? 'The current regex is invalid and will not generate any rules.'
-                  : 'This regular expression limits which URLs this profile applies custom headers to. E.g. https://.*.example.(com|org)/.*'
-            }
-            onChange={(event) => {
-              updateActiveProfile((profile) => ({ ...profile, urlRegexFilter: event.target.value }));
-            }}
-          />
-          <FormControlLabel
-            sx={{ marginBlockStart: '1rem' }}
-            control={
-              <Checkbox
-                checked={activeProfile.limitToLocalHost}
-                onChange={(event) => {
-                  updateActiveProfile((profile) => ({ ...profile, limitToLocalHost: event.target.checked }));
-                }}
-              />
-            }
-            label='Only apply response headers to responses originating from localhost'
-          />
-          <Divider sx={{ marginBlockStart: '2rem' }} />
-          <Box display='flex' justifyContent='flex-end' sx={{ fontSize: '12px' }}>
-            <p>
-              Don't like what you see?{' '}
-              <Link underline='hover' href='https://github.com/rickardandersson/rubric'>
-                Submit a PR!
-              </Link>
-            </p>
-          </Box>
-        </Box>
+        <SettingsTab
+          activeProfile={activeProfile}
+          regexIsMissing={regexIsMissing}
+          regexIsValid={regexIsValid}
+          updateActiveProfile={updateActiveProfile}
+        />
       )}
 
       {activeTabIndex === 3 && (
-        <Box id='tabpanel-3' aria-labelledby='tab-3' paddingBlockStart='1rem'>
-          <Box>
-            {isFirefox ? (
-              <Box display='flex' flexDirection='column' alignItems='flex-start' gap='1rem'>
-                <TextField
-                  label='Import JSON'
-                  fullWidth={true}
-                  value={importText}
-                  onChange={(event) => {
-                    setImportText(event.target.value);
-                  }}
-                  multiline
-                  rows={6}
-                  helperText='Paste the contents of a Rubric JSON export file and click "Import".'
-                />
-                <Button
-                  variant='outlined'
-                  startIcon={<FileUploadOutlinedIcon />}
-                  color='primary'
-                  disabled={importText.length === 0}
-                  onClick={() => {
-                    importSettings(importText);
-                  }}>
-                  Import
-                </Button>
-              </Box>
-            ) : (
-              <Button component='label' variant='outlined' startIcon={<FileUploadOutlinedIcon />}>
-                Import
-                <input type='file' onChange={handleFileSelected} hidden />
-              </Button>
-            )}
-            <Box paddingBlockStart='1rem'>
-              <Button variant='outlined' startIcon={<FileDownloadOutlinedIcon />} color='primary' onClick={exportSettings}>
-                Export
-              </Button>
-            </Box>
-          </Box>
-        </Box>
+        <ImportExportTab
+          importText={importText}
+          setImportText={setImportText}
+          importSettings={importSettings}
+          handleFileSelected={handleFileSelected}
+          exportSettings={exportSettings}
+        />
       )}
 
       <Snackbar
@@ -559,6 +379,24 @@ export const Popup = () => {
         onClose={() => setImportFailed(false)}>
         <Alert variant='outlined' severity='error' sx={{ width: '100%' }}>
           Failed to import settings.
+        </Alert>
+      </Snackbar>
+      <Snackbar
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        autoHideDuration={5000}
+        open={ruleUpdateError.length > 0}
+        onClose={() => setRuleUpdateError('')}>
+        <Alert variant='outlined' severity='error' sx={{ width: '100%' }}>
+          Failed to update rules: {ruleUpdateError}
+        </Alert>
+      </Snackbar>
+      <Snackbar
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        autoHideDuration={5000}
+        open={storageError.length > 0}
+        onClose={() => setStorageError('')}>
+        <Alert variant='outlined' severity='error' sx={{ width: '100%' }}>
+          Failed to save settings: {storageError}
         </Alert>
       </Snackbar>
     </>
