@@ -1,9 +1,16 @@
+/*
+ * Copyright (c) 2023-2026, Rickard Andersson <rickard.andersson@gmail.com>
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 body {
   margin: 0;
-  min-width: 800px;
+  min-width: 780px;
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 #app {
-    padding: 1.5rem 1.5rem 2rem 1.5rem;
+  padding: 1.5rem 1.5rem 2rem 1.5rem;
 }

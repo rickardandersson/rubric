@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Rickard Andersson <rickard.andersson@gmail.com>
+ * Copyright (c) 2023-2026, Rickard Andersson <rickard.andersson@gmail.com>
  *
  * SPDX-License-Identifier: BSD-3-Clause
  */
@@ -8,10 +8,10 @@ import '@fontsource/roboto/300.css';
 import '@fontsource/roboto/400.css';
 import '@fontsource/roboto/500.css';
 import '@fontsource/roboto/700.css';
-import { useMemo } from 'preact/hooks';
+import CssBaseline from '@mui/material/CssBaseline';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import CssBaseline from '@mui/material/CssBaseline';
+import { useMemo } from 'preact/hooks';
 import { Popup } from './Popup.jsx';
 
 export function App() {
